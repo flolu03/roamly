@@ -33,18 +33,20 @@ export const useAuthStore = create<AuthStore>((set) => ({
     }
   },
 
-  register: async (email, password, displayName) => {
+register: async (email, password, displayName) => {
     set({ isLoading: true, error: null })
     try {
       const data = await register(email, password, displayName)
       set({ user: data.user, isLoading: false })
     } catch (e: any) {
-      set({ error: e.response?.data?.error || 'Registrierung fehlgeschlagen', isLoading: false })
+      console.log('Register error:', JSON.stringify(e.response?.data))
+      set({ error: e.response?.data?.error || e.message || 'Registrierung fehlgeschlagen', isLoading: false })
     }
   },
 
-  logout: async () => {
-    const refreshToken = await SecureStore.getItemAsync('refreshToken')
+logout: async () => {
+    const { getToken } = await import('../api/client')
+    const refreshToken = await getToken('refreshToken')
     if (refreshToken) await logout(refreshToken)
     set({ user: null })
   },
