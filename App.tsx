@@ -3,6 +3,7 @@ import { useAuthStore } from './src/store/auth.store'
 import LoginScreen from './src/screens/LoginScreen'
 import RegisterScreen from './src/screens/RegisterScreen'
 import RouteBuilderScreen from './src/screens/RouteBuilderScreen'
+import FlightSearchScreen from './src/screens/FlightSearchScreen'
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native'
 
 export default function App() {
@@ -14,10 +15,12 @@ export default function App() {
   const isLoggedIn = user || isGuest
 
   if (isLoggedIn) {
+    if (screen === 'search') {
+      return <FlightSearchScreen onBack={() => setScreen('route')} />
+    }
     if (screen === 'route') {
       return <RouteBuilderScreen onSearch={() => setScreen('search')} />
     }
-
     return (
       <View style={styles.wrap}>
         <Text style={styles.logo}>roam<Text style={styles.accent}>ly</Text></Text>
@@ -25,17 +28,14 @@ export default function App() {
           ? <Text style={styles.sub}>Willkommen, {user.displayName}! 👋</Text>
           : <Text style={styles.sub}>Du bist als Gast unterwegs 👤</Text>
         }
-
         <TouchableOpacity style={styles.btn} onPress={() => setScreen('route')}>
           <Text style={styles.btnText}>Neue Rundreise planen →</Text>
         </TouchableOpacity>
-
         {!user && (
           <TouchableOpacity style={styles.btnSecondary} onPress={() => setIsGuest(false)}>
             <Text style={styles.btnSecondaryText}>Registrieren / Einloggen</Text>
           </TouchableOpacity>
         )}
-
         {user && (
           <TouchableOpacity style={styles.btnSecondary} onPress={logout}>
             <Text style={styles.btnSecondaryText}>Ausloggen</Text>
