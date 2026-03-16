@@ -34,15 +34,24 @@ export default function FlightSearchScreen({ onBack }: { onBack: () => void }) {
     loadFlights()
   }, [])
 
+  function extractIata(city: string): string {
+    const match = city.match(/\(([A-Z]{3})\)/)
+    return match ? match[1] : city.toUpperCase().slice(0, 3)
+  }
+
   async function loadFlights() {
     setIsLoading(true)
     setError(null)
     try {
+      const originIata = firstStop?.iataCode || extractIata(firstStop?.city || 'FRA')
+      const destIata = secondStop?.iataCode || extractIata(secondStop?.city || 'BKK')
+      const date = firstStop?.departureDate || '2026-06-01'
+
       const res = await axios.get('http://localhost:3000/flight/search', {
         params: {
-          origin: firstStop?.iataCode || 'FRA',
-          destination: secondStop?.iataCode || 'BKK',
-          date: firstStop?.departureDate || '2025-11-01',
+          origin: originIata,
+          destination: destIata,
+          date,
           pax: paxCount
         }
       })

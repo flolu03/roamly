@@ -26,10 +26,14 @@ function StopCard({ stop, index, total }: { stop: Stop, index: number, total: nu
       <View style={styles.stopRight}>
         <TextInput
           style={styles.cityInput}
-          placeholder="Stadt oder Flughafen (IATA)"
+          placeholder="Stadt (z.B. Bangkok (BKK))"
           placeholderTextColor="#bbb"
           value={stop.city}
-          onChangeText={(v) => updateStop(stop.id, 'city', v)}
+          onChangeText={(v) => {
+            updateStop(stop.id, 'city', v)
+            const match = v.match(/\(([A-Z]{3})\)/)
+            if (match) updateStop(stop.id, 'iataCode', match[1])
+          }}
           editable={!isHome}
         />
         <View style={styles.dateRow}>
