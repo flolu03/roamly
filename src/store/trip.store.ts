@@ -6,6 +6,7 @@ export interface Stop {
   iataCode: string
   arrivalDate: string
   departureDate: string
+  nights: string
 }
 
 interface TripStore {
@@ -13,9 +14,11 @@ interface TripStore {
   tripTitle: string
   paxCount: number
   tripType: 'oneway' | 'roundtrip'
+  tripMode: 'manual' | 'auto'
   setTripTitle: (title: string) => void
   setPaxCount: (count: number) => void
   setTripType: (type: 'oneway' | 'roundtrip') => void
+  setTripMode: (mode: 'manual' | 'auto') => void
   addStop: () => void
   removeStop: (id: string) => void
   updateStop: (id: string, field: keyof Stop, value: string) => void
@@ -24,9 +27,9 @@ interface TripStore {
 }
 
 const defaultStops: Stop[] = [
-  { id: '1', city: 'Frankfurt (FRA)', iataCode: 'FRA', arrivalDate: '', departureDate: '2025-11-01' },
-  { id: '2', city: '', iataCode: '', arrivalDate: '2025-11-01', departureDate: '' },
-  { id: '3', city: 'Frankfurt (FRA)', iataCode: 'FRA', arrivalDate: '', departureDate: '' },
+  { id: '1', city: 'Frankfurt (FRA)', iataCode: 'FRA', arrivalDate: '', departureDate: '', nights: '' },
+  { id: '2', city: '', iataCode: '', arrivalDate: '', departureDate: '', nights: '' },
+  { id: '3', city: 'Frankfurt (FRA)', iataCode: 'FRA', arrivalDate: '', departureDate: '', nights: '' },
 ]
 
 export const useTripStore = create<TripStore>((set) => ({
@@ -34,10 +37,12 @@ export const useTripStore = create<TripStore>((set) => ({
   tripTitle: 'Meine Rundreise',
   paxCount: 1,
   tripType: 'roundtrip',
+  tripMode: 'manual',
 
   setTripTitle: (title) => set({ tripTitle: title }),
   setPaxCount: (count) => set({ paxCount: count }),
   setTripType: (type) => set({ tripType: type }),
+  setTripMode: (mode) => set({ tripMode: mode }),
 
   addStop: () => set((state) => {
     const lastStop = state.stops[state.stops.length - 1]
@@ -47,6 +52,7 @@ export const useTripStore = create<TripStore>((set) => ({
       iataCode: '',
       arrivalDate: '',
       departureDate: '',
+      nights: '',
     }
     const stops = [...state.stops]
     stops.splice(stops.length - 1, 0, newStop)

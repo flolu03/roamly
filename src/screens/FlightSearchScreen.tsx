@@ -49,27 +49,33 @@ function extractIata(city: string): string {
 }
 
 function FlightSection({
-  leg, flights, selectedId, onSelect, onDetail,
+  leg, flights, selectedId, onSelect, onDetail, showDate = false,
 }: {
   leg: Leg
   flights: Flight[]
   selectedId: string | null
   onSelect: (id: string) => void
   onDetail: (f: Flight) => void
+  showDate?: boolean
 }) {
   return (
     <View style={{ marginBottom: 16 }}>
       <Text style={styles.legTitle}>{leg.label}</Text>
-      <Text style={styles.sectionTitle}>{flights.length} Flüge gefunden</Text>
+      <Text style={styles.sectionTitle}>{flights.length} Optionen · nach Preis sortiert</Text>
       {flights.map((flight, index) => (
         <TouchableOpacity
-          key={flight.id}
-          style={[styles.card, selectedId === flight.id && styles.cardSelected, index === 0 && styles.cardBest]}
+          key={`${flight.id}-${flight.date}`}
+          style={[styles.card, selectedId === `${flight.id}-${flight.date}` && styles.cardSelected, index === 0 && styles.cardBest]}
           onPress={() => onDetail(flight)}
         >
           {index === 0 && (
             <View style={styles.bestBadge}>
-              <Text style={styles.bestBadgeText}>Bestes Preis-Leistung</Text>
+              <Text style={styles.bestBadgeText}>Günstigste Option</Text>
+            </View>
+          )}
+          {showDate && (
+            <View style={styles.dateBadge}>
+              <Text style={styles.dateBadgeText}>{flight.date}</Text>
             </View>
           )}
           <View style={styles.cardRow}>
@@ -100,11 +106,11 @@ function FlightSection({
           <View style={styles.cardFooter}>
             <Text style={styles.flightNum}>{flight.airline} · {flight.flightNumber}</Text>
             <TouchableOpacity
-              style={[styles.selectSmallBtn, selectedId === flight.id && styles.selectSmallBtnActive]}
-              onPress={(e) => { e.stopPropagation?.(); onSelect(flight.id) }}
+              style={[styles.selectSmallBtn, selectedId === `${flight.id}-${flight.date}` && styles.selectSmallBtnActive]}
+              onPress={(e) => { e.stopPropagation?.(); onSelect(`${flight.id}-${flight.date}`) }}
             >
-              <Text style={[styles.selectSmallText, selectedId === flight.id && styles.selectSmallTextActive]}>
-                {selectedId === flight.id ? '✓ Gewählt' : 'Wählen'}
+              <Text style={[styles.selectSmallText, selectedId === `${flight.id}-${flight.date}` && styles.selectSmallTextActive]}>
+                {selectedId === `${flight.id}-${flight.date}` ? '✓ Gewählt' : 'Wählen'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -115,7 +121,7 @@ function FlightSection({
 }
 
 export default function FlightSearchScreen({ onBack }: { onBack: () => void }) {
-  const { stops, paxCount, tripType } = useTripStore()
+  const { stops, paxCount, tripType, tripMode } = useTripStore()
   const [legs, setLegs] = useState<Leg[]>([])
   const [flightsByLeg, setFlightsByLeg] = useState<Flight[][]>([])
   const [selectedByLeg, setSelectedByLeg] = useState<(string | null)[]>([])
@@ -126,7 +132,13 @@ export default function FlightSearchScreen({ onBack }: { onBack: () => void }) {
 
   useEffect(() => { loadFlights() }, [])
 
-  function buildLegs(): Leg[] {
+  function addDays(dateStr: string, days: number): string {
+    const d = new Date(dateStr)
+    d.setDate(d.getDate() + days)
+    return d.toISOString().split('T')[0]
+  }
+
+  function buildManualLegs(): Leg[] {
     const twoStops = stops.length === 2
     const first = stops[0]
     const second = stops[1]
@@ -136,60 +148,112 @@ export default function FlightSearchScreen({ onBack }: { onBack: () => void }) {
       const destIata = second.iataCode || extractIata(second.city)
       const result: Leg[] = [{
         label: `Hinflug · ${originIata} → ${destIata}`,
-        origin: originIata,
-        destination: destIata,
-        date: first.departureDate,
+        origin: originIata, destination: destIata, date: first.departureDate,
       }]
       if (tripType === 'roundtrip' && first.arrivalDate) {
         result.push({
           label: `Rückflug · ${destIata} → ${originIata}`,
-          origin: destIata,
-          destination: originIata,
-          date: first.arrivalDate,
+          origin: destIata, destination: originIata, date: first.arrivalDate,
         })
       }
       return result
     }
 
-    // Multi-Stop: jedes aufeinanderfolgende Paar
-    const result: Leg[] = []
-    for (let i = 0; i < stops.length - 1; i++) {
-      const from = stops[i]
+    return stops.slice(0, -1).map((stop, i) => {
       const to = stops[i + 1]
-      const originIata = from.iataCode || extractIata(from.city)
+      const originIata = stop.iataCode || extractIata(stop.city)
       const destIata = to.iataCode || extractIata(to.city)
-      result.push({
-        label: `Flug ${i + 1} · ${originIata} → ${destIata}`,
-        origin: originIata,
-        destination: destIata,
-        date: from.departureDate,
-      })
-    }
-    return result
+      return { label: `Flug ${i + 1} · ${originIata} → ${destIata}`, origin: originIata, destination: destIata, date: stop.departureDate }
+    })
   }
 
   async function loadFlights() {
     setIsLoading(true)
     setError(null)
     try {
-      const builtLegs = buildLegs()
-      setLegs(builtLegs)
-
-      const results = await Promise.all(
-        builtLegs.map(leg =>
-          axios.get('http://localhost:3000/flight/search', {
-            params: { origin: leg.origin, destination: leg.destination, date: leg.date, pax: paxCount }
-          })
+      if (tripMode === 'auto') {
+        await loadAutoFlights()
+      } else {
+        const builtLegs = buildManualLegs()
+        setLegs(builtLegs)
+        const results = await Promise.all(
+          builtLegs.map(leg =>
+            axios.get('http://localhost:3000/flight/search', {
+              params: { origin: leg.origin, destination: leg.destination, date: leg.date, pax: paxCount }
+            }).then(r => r.data.flights || []).catch(() => [])
+          )
         )
-      )
-
-      setFlightsByLeg(results.map(r => r.data.flights || []))
-      setSelectedByLeg(new Array(builtLegs.length).fill(null))
+        setFlightsByLeg(results)
+        setSelectedByLeg(new Array(builtLegs.length).fill(null))
+      }
     } catch {
       setError('Flüge konnten nicht geladen werden')
     } finally {
       setIsLoading(false)
     }
+  }
+
+  async function loadAutoFlights() {
+    const first = stops[0]
+    const startDate = first.departureDate || today
+
+    // Kumulierte Nächte berechnen → Basisdatum pro Leg
+    // Leg i: departure = startDate + Summe der Nächte aller vorherigen Zwischenstopps
+    let cumulativeNights = 0
+    const builtLegs: Leg[] = stops.slice(0, -1).map((stop, i) => {
+      const to = stops[i + 1]
+      const originIata = stop.iataCode || extractIata(stop.city)
+      const destIata = to.iataCode || extractIata(to.city)
+      const baseDate = addDays(startDate, cumulativeNights)
+      // Nächte am AKTUELLEN Stop aufaddieren (für das nächste Leg)
+      cumulativeNights += parseInt(stop.nights || '0') || 0
+      return {
+        label: `Flug ${i + 1} · ${originIata} → ${destIata}`,
+        origin: originIata,
+        destination: destIata,
+        date: baseDate,
+      }
+    })
+    setLegs(builtLegs)
+
+    // Pro Leg: Basisdatum ±2 Tage = 5 Suchdaten
+    const searchTasks: { legIdx: number; origin: string; destination: string; date: string }[] = []
+    builtLegs.forEach((leg, i) => {
+      for (let offset = -2; offset <= 2; offset++) {
+        const date = addDays(leg.date, offset)
+        if (date >= today) {
+          searchTasks.push({ legIdx: i, origin: leg.origin, destination: leg.destination, date })
+        }
+      }
+    })
+
+    // Alle parallel suchen
+    const results = await Promise.all(
+      searchTasks.map(task =>
+        axios.get('http://localhost:3000/flight/search', {
+          params: { origin: task.origin, destination: task.destination, date: task.date, pax: paxCount }
+        }).then(r => ({ legIdx: task.legIdx, flights: r.data.flights || [] }))
+          .catch(() => ({ legIdx: task.legIdx, flights: [] }))
+      )
+    )
+
+    // Pro Leg zusammenführen, Duplikate entfernen, nach Preis sortieren
+    const flightsByLegResult = builtLegs.map((_, i) => {
+      const seen = new Set<string>()
+      return results
+        .filter(r => r.legIdx === i)
+        .flatMap(r => r.flights)
+        .filter(f => {
+          const key = `${f.id}-${f.date}`
+          if (seen.has(key)) return false
+          seen.add(key)
+          return true
+        })
+        .sort((a, b) => a.totalPrice - b.totalPrice)
+    })
+
+    setFlightsByLeg(flightsByLegResult)
+    setSelectedByLeg(new Array(builtLegs.length).fill(null))
   }
 
   function openDeepLink(url: string) {
@@ -246,6 +310,7 @@ export default function FlightSearchScreen({ onBack }: { onBack: () => void }) {
                   setSelectedByLeg(updated)
                 }}
                 onDetail={(f) => { setDetailFlight(f); setDetailLegIndex(i) }}
+                showDate={tripMode === 'auto'}
               />
             ))}
           </ScrollView>
@@ -415,8 +480,10 @@ const styles = StyleSheet.create({
   card: { borderWidth: 0.5, borderColor: '#eee', borderRadius: 12, padding: 12, marginBottom: 10 },
   cardSelected: { borderColor: '#BA7517', borderWidth: 1.5 },
   cardBest: { borderColor: '#EF9F27' },
-  bestBadge: { backgroundColor: '#FAEEDA', alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, marginBottom: 8 },
+  bestBadge: { backgroundColor: '#FAEEDA', alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, marginBottom: 4 },
   bestBadgeText: { fontSize: 10, color: '#633806' },
+  dateBadge: { backgroundColor: '#f0f0f0', alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, marginBottom: 6 },
+  dateBadgeText: { fontSize: 11, fontWeight: '600', color: '#555' },
   cardRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   airlineBadge: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#f5f5f5', alignItems: 'center', justifyContent: 'center' },
   airlineCode: { fontSize: 10, fontWeight: '600', color: '#555' },

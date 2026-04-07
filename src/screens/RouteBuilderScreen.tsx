@@ -76,19 +76,23 @@ function DateInput({
   )
 }
 
-function StopCard({ stop, index, total }: { stop: Stop; index: number; total: number }) {
-  const { updateStop, removeStop, moveStop, tripType } = useTripStore()
+function StopCard({ stop, index, total, computedArrival }: { stop: Stop; index: number; total: number; computedArrival?: string }) {
+  const { updateStop, removeStop, moveStop, tripType, tripMode } = useTripStore()
   const isFirst = index === 0
   const isLast = index === total - 1
   const isHome = isFirst || isLast
   const twoStops = total === 2
 
-  // Datumslogik:
-  // - Hinflug (oneway): erster Stop nur Abflug, mittlere Ankunft+Abflug, letzter nichts
-  // - Hin+Rückflug (roundtrip) mit 2 Stops: erster zeigt Abflug + Rückkunft, letzter nichts
-  // - Roundtrip mit 3+ Stops: wie oneway (multi-city)
-  const showDeparture = !isLast
-  const showArrival = twoStops && tripType === 'roundtrip' && isFirst
+  let showDeparture: boolean
+  let showArrival: boolean
+
+  if (tripMode === 'auto') {
+    showDeparture = isFirst
+    showArrival = false  // wird automatisch berechnet
+  } else {
+    showDeparture = !isLast
+    showArrival = twoStops && tripType === 'roundtrip' && isFirst
+  }
 
   const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([])
   const debounceRef = useRef<any>(null)
@@ -152,11 +156,49 @@ function StopCard({ stop, index, total }: { stop: Stop; index: number; total: nu
           </View>
         )}
 
+        {/* Auto-Modus: Berechnetes Enddatum beim letzten Stop anzeigen */}
+        {tripMode === 'auto' && isLast && computedArrival && (
+          <View style={styles.computedDateBox}>
+            <Text style={styles.dateLabel}>Geplantes Reiseende</Text>
+            <Text style={styles.computedDateText}>{computedArrival}</Text>
+          </View>
+        )}
+
+        {/* Auto-Modus: Nächte-Eingabe für mittlere Stops */}
+        {tripMode === 'auto' && !isFirst && !isLast && (
+          <View style={styles.nightsRow}>
+            <Text style={styles.dateLabel}>Bevorzugte Nächte</Text>
+            <View style={styles.nightsInput}>
+              <TouchableOpacity
+                style={styles.nightsBtn}
+                onPress={() => updateStop(stop.id, 'nights', String(Math.max(1, parseInt(stop.nights || '1') - 1)))}
+              >
+                <Text style={styles.nightsBtnText}>−</Text>
+              </TouchableOpacity>
+              <TextInput
+                style={styles.nightsValue}
+                value={stop.nights || ''}
+                onChangeText={(v) => updateStop(stop.id, 'nights', v.replace(/[^0-9]/g, ''))}
+                keyboardType="numeric"
+                placeholder="0"
+                placeholderTextColor="#bbb"
+              />
+              <TouchableOpacity
+                style={styles.nightsBtn}
+                onPress={() => updateStop(stop.id, 'nights', String(parseInt(stop.nights || '0') + 1))}
+              >
+                <Text style={styles.nightsBtnText}>+</Text>
+              </TouchableOpacity>
+              <Text style={styles.nightsLabel}>Nächte (±2 Tage)</Text>
+            </View>
+          </View>
+        )}
+
         {(showDeparture || showArrival) && (
           <View style={styles.dateRow}>
             {showArrival && (
               <View style={styles.dateCol}>
-                <Text style={styles.dateLabel}>{twoStops && isFirst ? 'Rückkunft' : 'Ankunft'}</Text>
+                <Text style={styles.dateLabel}>{twoStops && isFirst ? 'Rückkunft' : 'Reiseende'}</Text>
                 <DateInput
                   value={stop.arrivalDate || ''}
                   onChange={(v) => updateStop(stop.id, 'arrivalDate', v)}
@@ -165,7 +207,7 @@ function StopCard({ stop, index, total }: { stop: Stop; index: number; total: nu
             )}
             {showDeparture && (
               <View style={styles.dateCol}>
-                <Text style={styles.dateLabel}>Abflug</Text>
+                <Text style={styles.dateLabel}>Reisestart</Text>
                 <DateInput
                   value={stop.departureDate || ''}
                   onChange={(v) => updateStop(stop.id, 'departureDate', v)}
@@ -208,7 +250,7 @@ function StopCard({ stop, index, total }: { stop: Stop; index: number; total: nu
 }
 
 export default function RouteBuilderScreen({ onSearch }: { onSearch: () => void }) {
-  const { stops, tripTitle, paxCount, tripType, addStop, setTripTitle, setPaxCount, setTripType } = useTripStore()
+  const { stops, tripTitle, paxCount, tripType, tripMode, addStop, setTripTitle, setPaxCount, setTripType, setTripMode } = useTripStore()
 
   const nights = stops.reduce((acc, s) => {
     if (s.arrivalDate && s.departureDate) {
@@ -217,6 +259,22 @@ export default function RouteBuilderScreen({ onSearch }: { onSearch: () => void 
     }
     return acc
   }, 0)
+
+  const autoLegs = stops.length - 1
+
+  function addDays(dateStr: string, days: number): string {
+    const d = new Date(dateStr)
+    d.setDate(d.getDate() + days)
+    return d.toISOString().split('T')[0]
+  }
+
+  const autoComputedEnd = (() => {
+    if (tripMode !== 'auto') return ''
+    const start = stops[0]?.departureDate
+    if (!start) return ''
+    const totalNights = stops.slice(0, -1).reduce((sum, s) => sum + (parseInt(s.nights || '0') || 0), 0)
+    return totalNights > 0 ? addDays(start, totalNights) : ''
+  })()
 
   return (
     <View style={styles.wrap}>
@@ -229,24 +287,57 @@ export default function RouteBuilderScreen({ onSearch }: { onSearch: () => void 
           placeholderTextColor="#bbb"
         />
 
+        {/* Modus-Toggle */}
         <View style={styles.tripTypeRow}>
           <TouchableOpacity
-            style={[styles.tripTypeBtn, tripType === 'oneway' && styles.tripTypeBtnActive]}
-            onPress={() => setTripType('oneway')}
+            style={[styles.tripTypeBtn, tripMode === 'manual' && styles.tripTypeBtnActive]}
+            onPress={() => setTripMode('manual')}
           >
-            <Text style={[styles.tripTypeBtnText, tripType === 'oneway' && styles.tripTypeBtnTextActive]}>
-              Hinflug
+            <Text style={[styles.tripTypeBtnText, tripMode === 'manual' && styles.tripTypeBtnTextActive]}>
+              Manuell
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.tripTypeBtn, tripType === 'roundtrip' && styles.tripTypeBtnActive]}
-            onPress={() => setTripType('roundtrip')}
+            style={[styles.tripTypeBtn, tripMode === 'auto' && styles.tripTypeBtnActive]}
+            onPress={() => setTripMode('auto')}
           >
-            <Text style={[styles.tripTypeBtnText, tripType === 'roundtrip' && styles.tripTypeBtnTextActive]}>
-              Hin- & Rückflug
+            <Text style={[styles.tripTypeBtnText, tripMode === 'auto' && styles.tripTypeBtnTextActive]}>
+              Automatisch
             </Text>
           </TouchableOpacity>
         </View>
+
+        {/* Hin/Rück nur im manuellen Modus */}
+        {tripMode === 'manual' && (
+          <View style={[styles.tripTypeRow, { marginTop: 0 }]}>
+            <TouchableOpacity
+              style={[styles.tripTypeBtn, tripType === 'oneway' && styles.tripTypeBtnActive]}
+              onPress={() => setTripType('oneway')}
+            >
+              <Text style={[styles.tripTypeBtnText, tripType === 'oneway' && styles.tripTypeBtnTextActive]}>
+                Hinflug
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tripTypeBtn, tripType === 'roundtrip' && styles.tripTypeBtnActive]}
+              onPress={() => setTripType('roundtrip')}
+            >
+              <Text style={[styles.tripTypeBtnText, tripType === 'roundtrip' && styles.tripTypeBtnTextActive]}>
+                Hin- & Rückflug
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Info-Panel im Auto-Modus */}
+        {tripMode === 'auto' && autoComputedEnd && (
+          <View style={styles.autoInfoBox}>
+            <Text style={styles.autoInfoText}>
+              Reiseende: {autoComputedEnd} · {autoLegs} Flüge
+            </Text>
+            <Text style={styles.autoInfoSub}>Abflugdaten werden automatisch berechnet (±2 Tage)</Text>
+          </View>
+        )}
 
         <View style={styles.paxRow}>
           <Text style={styles.paxLabel}>Personen:</Text>
@@ -277,7 +368,7 @@ export default function RouteBuilderScreen({ onSearch }: { onSearch: () => void 
 
       <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
         {stops.map((stop, i) => (
-          <StopCard key={stop.id} stop={stop} index={i} total={stops.length} />
+          <StopCard key={stop.id} stop={stop} index={i} total={stops.length} computedArrival={i === stops.length - 1 ? autoComputedEnd : undefined} />
         ))}
         {stops.length < 7 && (
           <TouchableOpacity style={styles.addBtn} onPress={() => { Haptics.impactAsync(); addStop() }}>
@@ -299,7 +390,10 @@ const styles = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: '#fff' },
   header: { padding: 20, paddingTop: 50, borderBottomWidth: 0.5, borderColor: '#eee' },
   titleInput: { fontSize: 22, fontWeight: '700', color: '#1a1a1a', marginBottom: 10 },
-  tripTypeRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  autoInfoBox: { backgroundColor: '#FAEEDA', borderRadius: 8, padding: 10, marginTop: 8 },
+  autoInfoText: { fontSize: 13, fontWeight: '600', color: '#854F0B' },
+  autoInfoSub: { fontSize: 11, color: '#BA7517', marginTop: 2 },
+  tripTypeRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
   tripTypeBtn: { flex: 1, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#ddd', alignItems: 'center' },
   tripTypeBtnActive: { backgroundColor: '#BA7517', borderColor: '#BA7517' },
   tripTypeBtnText: { fontSize: 13, fontWeight: '600', color: '#888' },
@@ -333,6 +427,14 @@ const styles = StyleSheet.create({
   dateRow: { flexDirection: 'row', gap: 6, marginTop: 2 },
   dateCol: { flex: 1 },
   dateLabel: { fontSize: 10, color: '#888', marginBottom: 2 },
+  nightsRow: { marginBottom: 6 },
+  nightsInput: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 },
+  nightsBtn: { width: 28, height: 28, borderRadius: 8, borderWidth: 0.5, borderColor: '#ddd', alignItems: 'center', justifyContent: 'center' },
+  nightsBtnText: { fontSize: 16, color: '#1a1a1a', lineHeight: 20 },
+  nightsValue: { width: 40, textAlign: 'center', borderWidth: 0.5, borderColor: '#ddd', borderRadius: 8, padding: 4, fontSize: 14, color: '#1a1a1a' },
+  nightsLabel: { fontSize: 11, color: '#888', marginLeft: 4 },
+  computedDateBox: { marginBottom: 6 },
+  computedDateText: { fontSize: 14, fontWeight: '600', color: '#BA7517', marginTop: 2 },
   dateInput: { flex: 1, borderWidth: 0.5, borderColor: '#ddd', borderRadius: 8, padding: 8, fontSize: 12, color: '#1a1a1a', justifyContent: 'center' },
   dateValue: { fontSize: 12, color: '#1a1a1a' },
   datePlaceholder: { fontSize: 12, color: '#bbb' },
