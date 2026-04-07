@@ -12,8 +12,10 @@ interface TripStore {
   stops: Stop[]
   tripTitle: string
   paxCount: number
+  tripType: 'oneway' | 'roundtrip'
   setTripTitle: (title: string) => void
   setPaxCount: (count: number) => void
+  setTripType: (type: 'oneway' | 'roundtrip') => void
   addStop: () => void
   removeStop: (id: string) => void
   updateStop: (id: string, field: keyof Stop, value: string) => void
@@ -31,9 +33,11 @@ export const useTripStore = create<TripStore>((set) => ({
   stops: defaultStops,
   tripTitle: 'Meine Rundreise',
   paxCount: 1,
+  tripType: 'roundtrip',
 
   setTripTitle: (title) => set({ tripTitle: title }),
   setPaxCount: (count) => set({ paxCount: count }),
+  setTripType: (type) => set({ tripType: type }),
 
   addStop: () => set((state) => {
     const lastStop = state.stops[state.stops.length - 1]

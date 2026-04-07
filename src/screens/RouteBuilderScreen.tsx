@@ -1,16 +1,122 @@
-import React from 'react'
+import React, { useState, useRef } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity,
-  ScrollView, StyleSheet, Alert
+  ScrollView, StyleSheet, Alert, Platform
 } from 'react-native'
+import DateTimePicker from '@react-native-community/datetimepicker'
+import axios from 'axios'
 import { useTripStore, Stop } from '../store/trip.store'
 import * as Haptics from 'expo-haptics'
 
-function StopCard({ stop, index, total }: { stop: Stop, index: number, total: number }) {
-  const { updateStop, removeStop, moveStop } = useTripStore()
+const API_URL = 'http://localhost:3000'
+
+interface PlaceSuggestion {
+  id: string
+  name: string
+  city_name?: string
+  iata_code: string
+  type: string
+}
+
+const today = new Date().toISOString().split('T')[0]
+
+function DateInput({
+  value,
+  onChange,
+}: {
+  value: string
+  onChange: (v: string) => void
+}) {
+  const [showPicker, setShowPicker] = useState(false)
+  const displayValue = value || today
+  const dateValue = new Date(displayValue)
+
+  // Setze heute als Standard beim ersten Render
+  React.useEffect(() => {
+    if (!value) onChange(today)
+  }, [])
+
+  if (Platform.OS === 'web') {
+    return React.createElement('input', {
+      type: 'date',
+      value: displayValue,
+      min: today,
+      onChange: (e: any) => onChange(e.target.value),
+      style: {
+        flex: 1,
+        border: '0.5px solid #ddd',
+        borderRadius: 8,
+        padding: 8,
+        fontSize: 12,
+        color: '#1a1a1a',
+        outline: 'none',
+        fontFamily: 'inherit',
+        cursor: 'pointer',
+      },
+    })
+  }
+
+  return (
+    <>
+      <TouchableOpacity style={styles.dateInput} onPress={() => setShowPicker(true)}>
+        <Text style={styles.dateValue}>{displayValue}</Text>
+      </TouchableOpacity>
+      {showPicker && (
+        <DateTimePicker
+          value={dateValue}
+          mode="date"
+          minimumDate={new Date()}
+          onChange={(_, date) => {
+            setShowPicker(false)
+            if (date) onChange(date.toISOString().split('T')[0])
+          }}
+        />
+      )}
+    </>
+  )
+}
+
+function StopCard({ stop, index, total }: { stop: Stop; index: number; total: number }) {
+  const { updateStop, removeStop, moveStop, tripType } = useTripStore()
   const isFirst = index === 0
   const isLast = index === total - 1
   const isHome = isFirst || isLast
+  const twoStops = total === 2
+
+  // Datumslogik:
+  // - Hinflug (oneway): erster Stop nur Abflug, mittlere Ankunft+Abflug, letzter nichts
+  // - Hin+Rückflug (roundtrip) mit 2 Stops: erster zeigt Abflug + Rückkunft, letzter nichts
+  // - Roundtrip mit 3+ Stops: wie oneway (multi-city)
+  const showDeparture = !isLast
+  const showArrival = twoStops && tripType === 'roundtrip' && isFirst
+
+  const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([])
+  const debounceRef = useRef<any>(null)
+
+  async function fetchSuggestions(query: string) {
+    if (query.length < 2) { setSuggestions([]); return }
+    try {
+      const res = await axios.get(`${API_URL}/places/search`, { params: { query } })
+      setSuggestions(res.data.data || [])
+    } catch {
+      setSuggestions([])
+    }
+  }
+
+  function handleCityChange(text: string) {
+    updateStop(stop.id, 'city', text)
+    const match = text.match(/\(([A-Z]{3})\)/)
+    if (match) updateStop(stop.id, 'iataCode', match[1])
+    clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => fetchSuggestions(text), 350)
+  }
+
+  function selectSuggestion(s: PlaceSuggestion) {
+    const label = `${s.city_name || s.name} (${s.iata_code})`
+    updateStop(stop.id, 'city', label)
+    updateStop(stop.id, 'iataCode', s.iata_code)
+    setSuggestions([])
+  }
 
   return (
     <View style={styles.stopCard}>
@@ -26,36 +132,48 @@ function StopCard({ stop, index, total }: { stop: Stop, index: number, total: nu
       <View style={styles.stopRight}>
         <TextInput
           style={styles.cityInput}
-          placeholder="Stadt (z.B. Bangkok (BKK))"
+          placeholder="Stadt suchen..."
           placeholderTextColor="#bbb"
           value={stop.city}
-          onChangeText={(v) => {
-            updateStop(stop.id, 'city', v)
-            const match = v.match(/\(([A-Z]{3})\)/)
-            if (match) updateStop(stop.id, 'iataCode', match[1])
-          }}
-          editable={!isHome}
+          onChangeText={handleCityChange}
         />
-        <View style={styles.dateRow}>
-          {!isFirst && (
-            <TextInput
-              style={styles.dateInput}
-              placeholder="Ankunft (JJJJ-MM-TT)"
-              placeholderTextColor="#bbb"
-              value={stop.arrivalDate}
-              onChangeText={(v) => updateStop(stop.id, 'arrivalDate', v)}
-            />
-          )}
-          {!isLast && (
-            <TextInput
-              style={styles.dateInput}
-              placeholder="Abflug (JJJJ-MM-TT)"
-              placeholderTextColor="#bbb"
-              value={stop.departureDate}
-              onChangeText={(v) => updateStop(stop.id, 'departureDate', v)}
-            />
-          )}
-        </View>
+        {suggestions.length > 0 && (
+          <View style={styles.suggestionsBox}>
+            {suggestions.slice(0, 5).map((s) => (
+              <TouchableOpacity
+                key={s.id}
+                style={styles.suggestionItem}
+                onPress={() => selectSuggestion(s)}
+              >
+                <Text style={styles.suggestionName}>{s.city_name || s.name}</Text>
+                <Text style={styles.suggestionCode}>{s.iata_code}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
+        {(showDeparture || showArrival) && (
+          <View style={styles.dateRow}>
+            {showArrival && (
+              <View style={styles.dateCol}>
+                <Text style={styles.dateLabel}>{twoStops && isFirst ? 'Rückkunft' : 'Ankunft'}</Text>
+                <DateInput
+                  value={stop.arrivalDate || ''}
+                  onChange={(v) => updateStop(stop.id, 'arrivalDate', v)}
+                />
+              </View>
+            )}
+            {showDeparture && (
+              <View style={styles.dateCol}>
+                <Text style={styles.dateLabel}>Abflug</Text>
+                <DateInput
+                  value={stop.departureDate || ''}
+                  onChange={(v) => updateStop(stop.id, 'departureDate', v)}
+                />
+              </View>
+            )}
+          </View>
+        )}
 
         {!isHome && (
           <View style={styles.stopActions}>
@@ -71,10 +189,14 @@ function StopCard({ stop, index, total }: { stop: Stop, index: number, total: nu
             )}
             <TouchableOpacity onPress={() => {
               Haptics.impactAsync()
-              Alert.alert('Stopp entfernen?', stop.city || 'Dieser Stopp', [
-                { text: 'Abbrechen', style: 'cancel' },
-                { text: 'Entfernen', style: 'destructive', onPress: () => removeStop(stop.id) }
-              ])
+              if (Platform.OS === 'web') {
+                if (window.confirm(`Stopp "${stop.city || 'Dieser Stopp'}" entfernen?`)) removeStop(stop.id)
+              } else {
+                Alert.alert('Stopp entfernen?', stop.city || 'Dieser Stopp', [
+                  { text: 'Abbrechen', style: 'cancel' },
+                  { text: 'Entfernen', style: 'destructive', onPress: () => removeStop(stop.id) }
+                ])
+              }
             }} style={[styles.actionBtn, styles.actionBtnDelete]}>
               <Text style={styles.actionTextDelete}>✕</Text>
             </TouchableOpacity>
@@ -86,9 +208,9 @@ function StopCard({ stop, index, total }: { stop: Stop, index: number, total: nu
 }
 
 export default function RouteBuilderScreen({ onSearch }: { onSearch: () => void }) {
-  const { stops, tripTitle, paxCount, addStop, setTripTitle, setPaxCount } = useTripStore()
+  const { stops, tripTitle, paxCount, tripType, addStop, setTripTitle, setPaxCount, setTripType } = useTripStore()
 
-  const nights = stops.reduce((acc, s, i) => {
+  const nights = stops.reduce((acc, s) => {
     if (s.arrivalDate && s.departureDate) {
       const diff = (new Date(s.departureDate).getTime() - new Date(s.arrivalDate).getTime()) / 86400000
       return acc + (diff > 0 ? diff : 0)
@@ -106,6 +228,26 @@ export default function RouteBuilderScreen({ onSearch }: { onSearch: () => void 
           placeholder="Reisename"
           placeholderTextColor="#bbb"
         />
+
+        <View style={styles.tripTypeRow}>
+          <TouchableOpacity
+            style={[styles.tripTypeBtn, tripType === 'oneway' && styles.tripTypeBtnActive]}
+            onPress={() => setTripType('oneway')}
+          >
+            <Text style={[styles.tripTypeBtnText, tripType === 'oneway' && styles.tripTypeBtnTextActive]}>
+              Hinflug
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tripTypeBtn, tripType === 'roundtrip' && styles.tripTypeBtnActive]}
+            onPress={() => setTripType('roundtrip')}
+          >
+            <Text style={[styles.tripTypeBtnText, tripType === 'roundtrip' && styles.tripTypeBtnTextActive]}>
+              Hin- & Rückflug
+            </Text>
+          </TouchableOpacity>
+        </View>
+
         <View style={styles.paxRow}>
           <Text style={styles.paxLabel}>Personen:</Text>
           <TouchableOpacity onPress={() => setPaxCount(Math.max(1, paxCount - 1))} style={styles.paxBtn}>
@@ -137,7 +279,6 @@ export default function RouteBuilderScreen({ onSearch }: { onSearch: () => void 
         {stops.map((stop, i) => (
           <StopCard key={stop.id} stop={stop} index={i} total={stops.length} />
         ))}
-
         {stops.length < 7 && (
           <TouchableOpacity style={styles.addBtn} onPress={() => { Haptics.impactAsync(); addStop() }}>
             <Text style={styles.addBtnText}>+ Zwischenstopp hinzufügen</Text>
@@ -158,6 +299,11 @@ const styles = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: '#fff' },
   header: { padding: 20, paddingTop: 50, borderBottomWidth: 0.5, borderColor: '#eee' },
   titleInput: { fontSize: 22, fontWeight: '700', color: '#1a1a1a', marginBottom: 10 },
+  tripTypeRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  tripTypeBtn: { flex: 1, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: '#ddd', alignItems: 'center' },
+  tripTypeBtnActive: { backgroundColor: '#BA7517', borderColor: '#BA7517' },
+  tripTypeBtnText: { fontSize: 13, fontWeight: '600', color: '#888' },
+  tripTypeBtnTextActive: { color: '#fff' },
   paxRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   paxLabel: { fontSize: 14, color: '#888' },
   paxBtn: { width: 28, height: 28, borderRadius: 14, borderWidth: 0.5, borderColor: '#ddd', alignItems: 'center', justifyContent: 'center' },
@@ -179,9 +325,17 @@ const styles = StyleSheet.create({
   stopDotTextHome: { color: '#fff' },
   stopLine: { flex: 1, width: 2, backgroundColor: '#eee', marginTop: 2 },
   stopRight: { flex: 1, paddingLeft: 10, paddingBottom: 16 },
-  cityInput: { borderWidth: 0.5, borderColor: '#ddd', borderRadius: 8, padding: 10, fontSize: 14, color: '#1a1a1a', marginBottom: 6 },
-  dateRow: { flexDirection: 'row', gap: 6 },
-  dateInput: { flex: 1, borderWidth: 0.5, borderColor: '#ddd', borderRadius: 8, padding: 8, fontSize: 12, color: '#1a1a1a' },
+  cityInput: { borderWidth: 0.5, borderColor: '#ddd', borderRadius: 8, padding: 10, fontSize: 14, color: '#1a1a1a', marginBottom: 4 },
+  suggestionsBox: { borderWidth: 0.5, borderColor: '#ddd', borderRadius: 8, backgroundColor: '#fff', marginBottom: 6, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 4, elevation: 3 },
+  suggestionItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 0.5, borderBottomColor: '#f0f0f0' },
+  suggestionName: { fontSize: 13, color: '#1a1a1a', flex: 1 },
+  suggestionCode: { fontSize: 12, fontWeight: '700', color: '#BA7517', marginLeft: 8 },
+  dateRow: { flexDirection: 'row', gap: 6, marginTop: 2 },
+  dateCol: { flex: 1 },
+  dateLabel: { fontSize: 10, color: '#888', marginBottom: 2 },
+  dateInput: { flex: 1, borderWidth: 0.5, borderColor: '#ddd', borderRadius: 8, padding: 8, fontSize: 12, color: '#1a1a1a', justifyContent: 'center' },
+  dateValue: { fontSize: 12, color: '#1a1a1a' },
+  datePlaceholder: { fontSize: 12, color: '#bbb' },
   stopActions: { flexDirection: 'row', gap: 6, marginTop: 6 },
   actionBtn: { width: 28, height: 28, borderRadius: 8, borderWidth: 0.5, borderColor: '#ddd', alignItems: 'center', justifyContent: 'center' },
   actionBtnDelete: { borderColor: '#ffcccc' },
@@ -191,5 +345,5 @@ const styles = StyleSheet.create({
   addBtnText: { color: '#BA7517', fontSize: 14, fontWeight: '600' },
   footer: { padding: 16, borderTopWidth: 0.5, borderColor: '#eee' },
   searchBtn: { backgroundColor: '#BA7517', borderRadius: 10, padding: 15, alignItems: 'center' },
-  searchBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' }
+  searchBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
 })
